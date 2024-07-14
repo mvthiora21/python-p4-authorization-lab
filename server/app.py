@@ -3,7 +3,6 @@
 from flask import Flask, make_response, jsonify, request, session
 from flask_migrate import Migrate
 from flask_restful import Api, Resource
-
 from models import db, Article, User
 
 app = Flask(__name__)
@@ -13,86 +12,84 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.json.compact = False
 
 migrate = Migrate(app, db)
-
 db.init_app(app)
 
 api = Api(app)
 
 class ClearSession(Resource):
-
     def delete(self):
-    
-        session['page_views'] = None
-        session['user_id'] = None
-
+        session.pop('page_views', None)
+        session.pop('user_id', None)
         return {}, 204
 
 class IndexArticle(Resource):
-    
     def get(self):
         articles = [article.to_dict() for article in Article.query.all()]
         return make_response(jsonify(articles), 200)
 
 class ShowArticle(Resource):
-
     def get(self, id):
+        article = Article.query.get(id)
+        if not article:
+            return {'message': 'Article not found'}, 404
 
-        article = Article.query.filter(Article.id == id).first()
         article_json = article.to_dict()
 
         if not session.get('user_id'):
-            session['page_views'] = 0 if not session.get('page_views') else session.get('page_views')
-            session['page_views'] += 1
+            session['page_views'] = session.get('page_views', 0) + 1
+            if session['page_views'] > 3:
+                return {'message': 'Maximum pageview limit reached'}, 401
 
-            if session['page_views'] <= 3:
-                return article_json, 200
-
-            return {'message': 'Maximum pageview limit reached'}, 401
-
-        return article_json, 200
+        return make_response(jsonify(article_json), 200)
 
 class Login(Resource):
-
     def post(self):
-        
         username = request.get_json().get('username')
-        user = User.query.filter(User.username == username).first()
+        if not username:
+            return {'message': 'Username is required'}, 400
 
-        if user:
-        
-            session['user_id'] = user.id
-            return user.to_dict(), 200
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            return {'message': 'User not found'}, 404
 
-        return {}, 401
+        session['user_id'] = user.id
+        return make_response(jsonify(user.to_dict()), 200)
 
 class Logout(Resource):
-
     def delete(self):
-
-        session['user_id'] = None
-        
+        session.pop('user_id', None)
         return {}, 204
 
 class CheckSession(Resource):
-
     def get(self):
-        
-        user_id = session['user_id']
-        if user_id:
-            user = User.query.filter(User.id == user_id).first()
-            return user.to_dict(), 200
-        
-        return {}, 401
+        user_id = session.get('user_id')
+        if not user_id:
+            return {}, 401
+
+        user = User.query.get(user_id)
+        if not user:
+            return {'message': 'User not found'}, 404
+
+        return make_response(jsonify(user.to_dict()), 200)
 
 class MemberOnlyIndex(Resource):
-    
     def get(self):
-        pass
+        if not session.get('user_id'):
+            return {'message': 'Unauthorized access'}, 401
+
+        articles = [article.to_dict() for article in Article.query.filter_by(is_member_only=True).all()]
+        return make_response(jsonify(articles), 200)
 
 class MemberOnlyArticle(Resource):
-    
     def get(self, id):
-        pass
+        if not session.get('user_id'):
+            return {'message': 'Unauthorized access'}, 401
+
+        article = Article.query.filter_by(id=id, is_member_only=True).first()
+        if not article:
+            return {'message': 'Article not found'}, 404
+
+        return make_response(jsonify(article.to_dict()), 200)
 
 api.add_resource(ClearSession, '/clear', endpoint='clear')
 api.add_resource(IndexArticle, '/articles', endpoint='article_list')
@@ -102,7 +99,6 @@ api.add_resource(Logout, '/logout', endpoint='logout')
 api.add_resource(CheckSession, '/check_session', endpoint='check_session')
 api.add_resource(MemberOnlyIndex, '/members_only_articles', endpoint='member_index')
 api.add_resource(MemberOnlyArticle, '/members_only_articles/<int:id>', endpoint='member_article')
-
 
 if __name__ == '__main__':
     app.run(port=5555, debug=True)
